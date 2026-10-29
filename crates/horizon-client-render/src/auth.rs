@@ -14,17 +14,46 @@ pub const DEFAULT_DISCOVERY: &str = "https://discovery.minecraftservices.com/min
 /// A session file older than this is refused: it can't be replayed later.
 const MAX_SESSION_FILE_AGE: Duration = Duration::from_secs(120);
 
-/// A signed-in account (vanilla's User with type msa).
+/// Which account service a session belongs to: where it joins servers, and
+/// where a server asks about a player who joined with it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Provider {
+    /// Microsoft and the Minecraft services (vanilla).
+    #[default]
+    Microsoft,
+    /// Ely.by's Yggdrasil-compatible authserver (`elyby.rs`, docs/elyby-account.md).
+    ElyBy,
+}
+impl Provider {
+    /// The session file's `user_type`.
+    pub fn user_type(self) -> &'static str {
+        match self {
+            Self::Microsoft => "msa",
+            Self::ElyBy => "elyby",
+        }
+    }
+    pub fn from_user_type(text: &str) -> Option<Self> {
+        match text {
+            "msa" => Some(Self::Microsoft),
+            "elyby" => Some(Self::ElyBy),
+            _ => None,
+        }
+    }
+}
+
+/// A signed-in account (vanilla's User with type msa, or an Ely.by one).
 pub struct AuthSession {
     pub name: String,
     pub uuid: u128,
     pub xuid: Option<String>,
+    pub provider: Provider,
     access_token: String,
 }
 impl std::fmt::Debug for AuthSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AuthSession")
             .field("name", &self.name)
+            .field("provider", &self.provider)
             .field("uuid", &horizon_protocol::crypto::uuid_string(self.uuid))
             .field("access_token", &"<hidden>")
             .finish()
@@ -46,8 +75,13 @@ impl AuthSession {
             name: name.to_owned(),
             uuid,
             xuid: None,
+            provider: Provider::Microsoft,
             access_token: access_token.to_owned(),
         }
+    }
+    pub fn with_provider(mut self, provider: Provider) -> Self {
+        self.provider = provider;
+        self
     }
     /// The session file's JSON: {"name", "uuid", "access_token", "user_type": "msa", "xuid"}.
     pub fn parse(text: &str) -> Result<Self, String> {
@@ -64,13 +98,16 @@ impl AuthSession {
         let access_token = field("access_token")
             .filter(|t| !t.is_empty())
             .ok_or("the session file has no access token")?;
-        if field("user_type").is_some_and(|t| t != "msa") {
-            return Err("the session file is not a Microsoft account session".into());
-        }
+        let provider = match field("user_type") {
+            None => Provider::Microsoft,
+            Some(t) => Provider::from_user_type(t)
+                .ok_or("the session file is not a supported account session")?,
+        };
         Ok(Self {
             name: name.to_owned(),
             uuid,
             xuid: field("xuid").map(str::to_owned),
+            provider,
             access_token: access_token.to_owned(),
         })
     }
@@ -216,8 +253,14 @@ pub fn join_request(session: &AuthSession, server_hash: &str) -> String {
 /// MinecraftServicesSessionService.joinServer: tell the session service this
 /// account is joining the server whose hash is `server_hash`.
 pub fn join_server(session: &AuthSession, server_hash: &str) -> Result<(), JoinError> {
-    let doc = discovery()?;
-    let url = endpoint(&doc, "session", "join").ok_or(JoinError::Unavailable)?;
+    let url = match session.provider {
+        Provider::Microsoft => {
+            let doc = discovery()?;
+            endpoint(&doc, "session", "join").ok_or(JoinError::Unavailable)?
+        }
+        // The same join request, at Ely.by's own host.
+        Provider::ElyBy => format!("{}/session/join", crate::elyby::base_url()),
+    };
     match agent()
         .post(&url)
         .set("Content-Type", "application/json; charset=utf-8")
@@ -259,13 +302,69 @@ fn url_encode(text: &str) -> String {
 /// whether `name` joined with `server_hash` (and from `ip`, when the server
 /// prevents proxy connections). `Ok(None)`: it didn't, or the service said
 /// no; `Err(Unavailable)`: no answer.
+///
+/// The services a server asks are `HORIZON_AUTH_PROVIDERS` (`microsoft`,
+/// `elyby`, in the order they are tried; default `microsoft`). A name is
+/// verified by the first service that knows the join: with Ely.by on, an
+/// Ely.by player may hold a name a Microsoft player holds too, so keep
+/// whitelists and ops on UUIDs, which differ between the services.
 pub fn has_joined(
     name: &str,
     server_hash: &str,
     ip: Option<std::net::IpAddr>,
 ) -> Result<Option<JoinedProfile>, JoinError> {
-    let doc = discovery()?;
-    let url = endpoint(&doc, "session", "verify").ok_or(JoinError::Unavailable)?;
+    let mut unavailable = false;
+    for provider in accepted_providers() {
+        match has_joined_at(provider, name, server_hash, ip) {
+            Ok(Some(profile)) => return Ok(Some(profile)),
+            Ok(None) => {}
+            Err(JoinError::Unavailable) => unavailable = true,
+            Err(_) => {}
+        }
+    }
+    if unavailable {
+        Err(JoinError::Unavailable)
+    } else {
+        Ok(None)
+    }
+}
+
+/// The account services this server accepts (`HORIZON_AUTH_PROVIDERS`).
+pub fn accepted_providers() -> Vec<Provider> {
+    parse_providers(std::env::var("HORIZON_AUTH_PROVIDERS").ok().as_deref())
+}
+
+fn parse_providers(text: Option<&str>) -> Vec<Provider> {
+    let mut out = Vec::new();
+    for part in text.unwrap_or("").split(',').map(str::trim) {
+        let provider = match part.to_ascii_lowercase().as_str() {
+            "microsoft" | "msa" | "mojang" => Provider::Microsoft,
+            "elyby" | "ely.by" | "ely" => Provider::ElyBy,
+            _ => continue,
+        };
+        if !out.contains(&provider) {
+            out.push(provider);
+        }
+    }
+    if out.is_empty() {
+        out.push(Provider::Microsoft);
+    }
+    out
+}
+
+fn has_joined_at(
+    provider: Provider,
+    name: &str,
+    server_hash: &str,
+    ip: Option<std::net::IpAddr>,
+) -> Result<Option<JoinedProfile>, JoinError> {
+    let url = match provider {
+        Provider::Microsoft => {
+            let doc = discovery()?;
+            endpoint(&doc, "session", "verify").ok_or(JoinError::Unavailable)?
+        }
+        Provider::ElyBy => format!("{}/session/hasJoined", crate::elyby::base_url()),
+    };
     let mut query = format!(
         "username={}&serverId={}",
         url_encode(name),
@@ -434,5 +533,33 @@ mod tests {
             Some("https://s/join")
         );
         assert_eq!(endpoint(&doc, "session", "verify"), None);
+    }
+
+    #[test]
+    fn providers_are_tried_in_the_order_listed() {
+        use Provider::*;
+        assert_eq!(parse_providers(None), vec![Microsoft]);
+        assert_eq!(parse_providers(Some("")), vec![Microsoft]);
+        assert_eq!(parse_providers(Some("bogus")), vec![Microsoft]);
+        assert_eq!(
+            parse_providers(Some("elyby, microsoft")),
+            vec![ElyBy, Microsoft]
+        );
+        assert_eq!(parse_providers(Some("Ely.by,elyby,bogus")), vec![ElyBy]);
+    }
+
+    #[test]
+    fn elyby_session_files() {
+        let text = |user_type: &str| {
+            format!(
+                r#"{{"name":"A","uuid":"069a79f444e94726a5befca90e38aaf5","access_token":"t"{user_type}}}"#
+            )
+        };
+        let ely = AuthSession::parse(&text(r#","user_type":"elyby""#)).unwrap();
+        assert_eq!(ely.provider, Provider::ElyBy);
+        assert_eq!(Provider::ElyBy.user_type(), "elyby");
+        let none = AuthSession::parse(&text("")).unwrap();
+        assert_eq!(none.provider, Provider::Microsoft);
+        assert!(AuthSession::parse(&text(r#","user_type":"mojang""#)).is_err());
     }
 }

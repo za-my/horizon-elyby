@@ -400,12 +400,15 @@ impl Options {
             execution_role: execution_role::ExecutionRole::Client,
         };
         let mut session_file = std::env::var("HORIZON_SESSION_FILE").ok();
+        let mut elyby_login: Option<String> = None;
+        let mut elyby_logout = false;
+        let mut offline = false;
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..128 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --quickPlaySingleplayer WORLD  Open this world of saves/ at start, only if it exists (vanilla's)\n  --quickPlayMultiplayer HOST[:PORT]  The same as --server (vanilla's name)\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A content mod (.hmod or folder) to develop: always on\n  --in-frame              DEPRECATED, do not use: unsupported, will be removed soon (also --no-server-thread)\n  --pregen                Add Horizon's /pregen command (docs/pregeneration.md)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
+                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..128 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --quickPlaySingleplayer WORLD  Open this world of saves/ at start, only if it exists (vanilla's)\n  --quickPlayMultiplayer HOST[:PORT]  The same as --server (vanilla's name)\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --elyby-login LOGIN     Sign in with an Ely.by account (username or e-mail) and keep it in horizon-elyby.json\n  --elyby-logout          Forget the kept Ely.by account\n  --offline               Play under --name / the kept offline name, ignoring a kept Ely.by account\n  --dev-mod PATH          A content mod (.hmod or folder) to develop: always on\n  --in-frame              DEPRECATED, do not use: unsupported, will be removed soon (also --no-server-thread)\n  --pregen                Add Horizon's /pregen command (docs/pregeneration.md)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
                         horizon_core::VANILLA_VERSION
                     );
                     return Ok(None);
@@ -419,6 +422,9 @@ impl Options {
                 "--test-terrain" => o.test_terrain = true,
                 "--no-pause" => o.no_pause = true,
                 "--offscreen" => o.offscreen = true,
+                // Play under a plain name: no kept Ely.by account is signed in.
+                "--offline" => offline = true,
+                "--elyby-logout" => elyby_logout = true,
                 "--control" => o.control = Some(horizon_client::control::default_path()),
                 "--server-thread" => o.server_thread = true,
                 "--in-frame" | "--no-server-thread" => {
@@ -487,6 +493,7 @@ impl Options {
                         "--server" | "--quickPlayMultiplayer" => o.server = Some(value),
                         "--name" => o.player_name = Some(value),
                         "--session-file" => session_file = Some(value),
+                        "--elyby-login" => elyby_login = Some(value),
                         "--control-socket" => o.control = Some(value.into()),
                         "--time" => o.time = Some(value.parse()?),
                         "--weather" => o.weather = Some(value),
@@ -508,14 +515,51 @@ impl Options {
         }
         // The launcher's account: online-mode servers need it. A bad file
         // only leaves the game offline.
+        let mut signed_in = false;
         if let Some(path) = session_file.filter(|p| !p.is_empty()) {
             match horizon_client::auth::AuthSession::load(path.as_ref()) {
                 Ok(session) => {
                     o.player_name = Some(session.name.clone());
                     horizon_client::auth::set_current(session);
+                    signed_in = true;
                 }
                 Err(e) => eprintln!("Horizon: not signed in: {e}"),
             }
+        }
+        // Ely.by (docs/elyby-account.md): the kept account signs in again at
+        // start, `--elyby-login` makes a new one and `--offline` plays under a
+        // plain name instead. The launcher's own account comes first.
+        if elyby_logout {
+            let dir = std::env::current_dir()?;
+            if let Some(account) = horizon_client::elyby::load(&dir) {
+                account.sign_out();
+            }
+            horizon_client::elyby::forget(&dir);
+            println!("Horizon: signed out of Ely.by");
+            return Ok(None);
+        }
+        let client = matches!(o.execution_role, execution_role::ExecutionRole::Client);
+        if !signed_in && !offline && client {
+            let dir = std::env::current_dir()?;
+            let account = match elyby_login {
+                Some(login) => Some(horizon_client::elyby::cli_sign_in(&login, &dir)?),
+                None => horizon_client::elyby::stored_for_start(&dir)
+                    .map_err(|e| {
+                        eprintln!(
+                            "Horizon: Ely.by: {e}; playing offline (--elyby-login signs in again)"
+                        );
+                    })
+                    .ok()
+                    .flatten(),
+            };
+            if let Some(account) = account {
+                o.player_name = Some(account.name.clone());
+                horizon_client::auth::set_current(account.session());
+            }
+        } else if elyby_login.is_some() {
+            eprintln!(
+                "Horizon: --elyby-login ignored (another account is signed in, or --offline)"
+            );
         }
         Ok(Some(o))
     }

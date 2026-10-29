@@ -26,6 +26,9 @@
 /horizon-controller.txt
 /horizon-extras.txt
 /horizon-player.txt
+# The kept Ely.by session (tokens): never commit it.
+/horizon-elyby.json
+/horizon-elyby.json.tmp
 /servers.dat
 /screenshots/
 /.horizon-cache/
