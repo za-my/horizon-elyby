@@ -6,7 +6,13 @@ impl Launcher {
     /// The chip's two lines: the name that plays, and how.
     pub(super) fn who_plays(&self) -> (String, &'static str) {
         match self.accounts.selected() {
-            Some(a) => (a.name.clone(), tr("Microsoft account")),
+            Some(a) => {
+                let how = match a.provider {
+                    account::AccountProvider::Microsoft => tr("Microsoft account"),
+                    account::AccountProvider::ElyBy => tr("Ely.by account"),
+                };
+                (a.name.clone(), how)
+            }
             None => (String::new(), tr("Sign in with Microsoft")),
         }
     }
@@ -26,7 +32,13 @@ impl Launcher {
         self.accounts
             .accounts
             .iter()
-            .map(|a| (a.uuid.clone(), a.name.clone(), tr("Microsoft")))
+            .map(|a| {
+                let how = match a.provider {
+                    account::AccountProvider::Microsoft => tr("Microsoft"),
+                    account::AccountProvider::ElyBy => tr("Ely.by"),
+                };
+                (a.uuid.clone(), a.name.clone(), how)
+            })
             .collect()
     }
 

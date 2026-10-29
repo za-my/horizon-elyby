@@ -116,6 +116,15 @@ enum AccountCmd {
         #[arg(long = "for")]
         target: Option<String>,
     },
+    /// Sign in with an Ely.by account (username or email and password)
+    SignInElyBy {
+        /// Your Ely.by username or email (if omitted, you will be prompted)
+        #[arg(long)]
+        login: Option<String>,
+        /// 2FA code (if required)
+        #[arg(long)]
+        code: Option<String>,
+    },
     /// Renew an account's session now, even when its access token is still fresh
     Refresh { who: String },
     /// Renew an account's session for a game already running: prints the read-once session file
@@ -1906,6 +1915,10 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 json(serde_json::json!({
                     "accounts": accounts.accounts.iter().map(|a| serde_json::json!({
                         "name": a.name, "uuid": a.uuid,
+                        "provider": match a.provider {
+                            account::AccountProvider::Microsoft => "microsoft",
+                            account::AccountProvider::ElyBy => "elyby",
+                        },
                         "selected": accounts.selected.as_ref() == Some(&a.uuid),
                         "authentication": account::session::status(account::store(), &a.uuid),
                     })).collect::<Vec<_>>(),
@@ -1930,7 +1943,11 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                         account::session::State::Retry => format!(": {}", status.message),
                         _ => String::new(),
                     };
-                    println!("{mark} {}  {}  {}{why}", a.name, a.uuid, status.label());
+                    let provider = match a.provider {
+                        account::AccountProvider::Microsoft => "Microsoft",
+                        account::AccountProvider::ElyBy => "Ely.by",
+                    };
+                    println!("{mark} {}  {}  ({provider})  {}{why}", a.name, a.uuid, status.label());
                 }
                 if !accounts.has_owner(account::store()) {
                     println!(
@@ -2006,6 +2023,51 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
             println!("Signed in as {}.", signed_in.name);
             if let Some(said) = account::no_keychain() {
                 eprintln!("{said}");
+            }
+        }
+        AccountCmd::SignInElyBy { login, code } => {
+            let login = match login {
+                Some(l) if !l.trim().is_empty() => l.trim().to_string(),
+                _ => {
+                    eprint!("Ely.by username or email: ");
+                    let mut line = String::new();
+                    std::io::stdin().read_line(&mut line).map_err(|e| e.to_string())?;
+                    let trimmed = line.trim().to_string();
+                    if trimmed.is_empty() {
+                        return Err("Login cannot be empty.".into());
+                    }
+                    trimmed
+                }
+            };
+            eprint!("Ely.by password: ");
+            let mut password = String::new();
+            std::io::stdin().read_line(&mut password).map_err(|e| e.to_string())?;
+            let password = password.trim_end_matches(&['\r', '\n'][..]).to_string();
+
+            let mut code = code;
+            loop {
+                match account::elyby_authenticate(&login, &password, code.as_deref()) {
+                    Ok((signed_in, secrets)) => {
+                        accounts.add(account::store(), signed_in.clone(), &secrets)?;
+                        accounts.save()?;
+                        println!("Signed in as {} (Ely.by).", signed_in.name);
+                        if let Some(said) = account::no_keychain() {
+                            eprintln!("{said}");
+                        }
+                        break;
+                    }
+                    Err(e) if e == "TWO_FACTOR_REQUIRED" => {
+                        eprint!("Ely.by 2FA authenticator code: ");
+                        let mut line = String::new();
+                        std::io::stdin().read_line(&mut line).map_err(|e| e.to_string())?;
+                        let trimmed = line.trim().to_string();
+                        if trimmed.is_empty() {
+                            return Err("2FA code cannot be empty.".into());
+                        }
+                        code = Some(trimmed);
+                    }
+                    Err(e) => return Err(e),
+                }
             }
         }
         AccountCmd::SignOut { who } => {

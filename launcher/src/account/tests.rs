@@ -238,6 +238,7 @@ fn the_whole_chain() {
                 "slim".into()
             )),
             cape: Some("http://textures.minecraft.net/texture/cape2".into()),
+            provider: AccountProvider::Microsoft,
         }
     );
     assert_eq!(secrets.minecraft_token, "mc-token");
@@ -316,6 +317,7 @@ fn notch() -> Account {
         name: "Notch".into(),
         skin: None,
         cape: None,
+        provider: AccountProvider::Microsoft,
     }
 }
 
@@ -328,6 +330,7 @@ fn secrets(token: &str, owns: bool) -> Secrets {
         minecraft_expires_at: now() + 7200,
         xuid: None,
         owns,
+        provider: AccountProvider::Microsoft,
     }
 }
 
@@ -671,6 +674,7 @@ fn any_owner_opens_the_gate_and_the_one_who_plays_brings_the_session() {
         name: "Alex".into(),
         skin: None,
         cape: None,
+        provider: AccountProvider::Microsoft,
     });
     accounts.selected = Some("other".into());
     let pass = launch(&ep, Some("test-client"), &store, &mut accounts).unwrap();
@@ -812,6 +816,7 @@ fn accounts_keep_secrets_in_the_store_only() {
         name: "Notch".into(),
         skin: None,
         cape: None,
+        provider: AccountProvider::Microsoft,
     };
     let secrets = Secrets {
         refresh_token: "r".into(),
@@ -820,6 +825,7 @@ fn accounts_keep_secrets_in_the_store_only() {
         minecraft_expires_at: 1,
         xuid: None,
         owns: true,
+        provider: AccountProvider::Microsoft,
     };
     accounts.add(&store, account.clone(), &secrets).unwrap();
     assert_eq!(accounts.selected(), Some(&account));
@@ -1114,6 +1120,7 @@ fn session_files_are_private_and_complete() {
         name: "Notch".into(),
         skin: None,
         cape: None,
+        provider: AccountProvider::Microsoft,
     };
     let secrets = Secrets {
         refresh_token: "r".into(),
@@ -1122,6 +1129,7 @@ fn session_files_are_private_and_complete() {
         minecraft_expires_at: 1,
         xuid: Some("25".into()),
         owns: true,
+        provider: AccountProvider::Microsoft,
     };
     let path = write_session_file(&dir, &account, &secrets).unwrap();
     let v: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -1168,6 +1176,7 @@ fn play_as_picks_a_signed_in_account() {
             name: "Ludo".into(),
             skin: None,
             cape: None,
+            provider: AccountProvider::Microsoft,
         }],
         ..Accounts::default()
     };
@@ -2457,6 +2466,57 @@ fn a_launch_as_another_account_leaves_the_selected_one() {
     );
     assert_eq!(gone.unwrap_err(), "That account isn't signed in.");
     assert_eq!(accounts.selected.as_deref(), Some(UUID));
+}
+
+#[test]
+fn elyby_session_files_have_user_type_elyby() {
+    let dir = std::env::temp_dir().join(format!("horizon-launcher-elyby-session-{}", std::process::id()));
+    let account = Account {
+        uuid: UUID.into(),
+        name: "ElyPlayer".into(),
+        skin: None,
+        cape: None,
+        provider: AccountProvider::ElyBy,
+    };
+    let secrets = Secrets {
+        refresh_token: "client-token".into(),
+        minecraft_token: "elyby-token".into(),
+        minecraft_expires_at: now() + 3600,
+        xuid: None,
+        owns: true,
+        provider: AccountProvider::ElyBy,
+    };
+    let path = write_session_file(&dir, &account, &secrets).unwrap();
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        v,
+        json!({"name": "ElyPlayer", "uuid": UUID, "access_token": "elyby-token", "user_type": "elyby", "xuid": null})
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn elyby_account_satisfies_owner_gate_and_plays_as_elyby() {
+    let store = MemoryStore::default();
+    let account = Account {
+        uuid: "elyby-uuid".into(),
+        name: "ElyPlayer".into(),
+        skin: None,
+        cape: None,
+        provider: AccountProvider::ElyBy,
+    };
+    let secrets = Secrets {
+        refresh_token: "ct".into(),
+        minecraft_token: "at".into(),
+        minecraft_expires_at: now() + 3600,
+        xuid: None,
+        owns: true,
+        provider: AccountProvider::ElyBy,
+    };
+    let mut accounts = Accounts::default();
+    accounts.add(&store, account.clone(), &secrets).unwrap();
+    assert!(accounts.has_owner(&store));
+    assert_eq!(accounts.selected.as_deref(), Some("elyby-uuid"));
 }
 
 #[test]

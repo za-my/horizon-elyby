@@ -64,10 +64,13 @@ pub(super) enum Field {
     AccentHex,
     /// The Shop's gift recipient (`wardrobe_page/shop/basket.rs`).
     ShopGift,
+    ElyByLogin,
+    ElyByPassword,
+    ElyByCode,
 }
 
 impl Field {
-    const ALL: [Field; 24] = [
+    const ALL: [Field; 27] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -92,6 +95,9 @@ impl Field {
         Field::DeleteServer,
         Field::AccentHex,
         Field::ShopGift,
+        Field::ElyByLogin,
+        Field::ElyByPassword,
+        Field::ElyByCode,
     ];
 }
 
@@ -1054,7 +1060,7 @@ impl Launcher {
 
     // ----- Building blocks ------------------------------------------------------------------
 
-    fn focus_handle(&mut self, f: Field, cx: &mut Context<Self>) -> FocusHandle {
+    pub(super) fn focus_handle(&mut self, f: Field, cx: &mut Context<Self>) -> FocusHandle {
         self.servers
             .focus
             .entry(f)
@@ -1188,7 +1194,7 @@ impl Launcher {
                 &t,
                 focused,
                 selected,
-                f == Field::Token,
+                f == Field::Token || f == Field::ElyByPassword,
                 placeholder,
             ))
             .on_click(cx.listener(move |this, ev: &ClickEvent, window, cx| {
@@ -1214,6 +1220,9 @@ impl Launcher {
                 match line_edit::handle(this.servers.text(f), ev, cx) {
                     Key::Enter if matches!(f, Field::InstanceName | Field::InstanceGroup) => {
                         this.save_instance(cx)
+                    }
+                    Key::Enter if matches!(f, Field::ElyByLogin | Field::ElyByPassword | Field::ElyByCode) => {
+                        this.submit_elyby();
                     }
                     Key::Enter => this.field_enter(f),
                     Key::Escape => {
@@ -1279,7 +1288,11 @@ impl Launcher {
             | Field::InstanceModsFilter
             | Field::ConsoleSearch
             | Field::DeleteServer
-            | Field::AccentHex => {}
+            | Field::AccentHex
+            | Field::ShopGift
+            | Field::ElyByLogin
+            | Field::ElyByPassword
+            | Field::ElyByCode => {}
             Field::PreLaunch | Field::Wrapper | Field::LaunchEnv | Field::PostExit => {
                 self.save_launch()
             }
