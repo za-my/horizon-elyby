@@ -410,17 +410,38 @@ fn owns_game(ep: &Endpoints, token: &str) -> Result<bool, String> {
         }))
 }
 
+/// Which authentication service an account belongs to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AccountProvider {
+    #[default]
+    Microsoft,
+    #[serde(rename = "elyby")]
+    ElyBy,
+}
+
+impl AccountProvider {
+    pub fn user_type(self) -> &'static str {
+        match self {
+            Self::Microsoft => "msa",
+            Self::ElyBy => "elyby",
+        }
+    }
+}
+
 /// A Minecraft profile, as the launcher shows and remembers it (no secrets).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Account {
     /// The profile UUID without dashes.
     pub uuid: String,
     pub name: String,
-    /// The active skin's URL (textures.minecraft.net) and model ("classic" or "slim").
+    /// The active skin's URL (textures.minecraft.net or ely.by) and model ("classic" or "slim").
     #[serde(default)]
     pub skin: Option<(String, String)>,
     #[serde(default)]
     pub cape: Option<String>,
+    #[serde(default)]
+    pub provider: AccountProvider,
 }
 
 /// The profile; none when the account has none (it doesn't own the game, or never made one).
@@ -460,6 +481,7 @@ fn profile(ep: &Endpoints, token: &str) -> Result<Option<Account>, String> {
             ))
         }),
         cape: active("capes").and_then(|c| str_field(&c, "url")),
+        provider: AccountProvider::Microsoft,
     }))
 }
 
@@ -476,6 +498,8 @@ pub struct Secrets {
     /// existed passed the same check at sign-in, which refuses everyone else.
     #[serde(default = "owned_at_sign_in")]
     owns: bool,
+    #[serde(default)]
+    pub provider: AccountProvider,
 }
 fn owned_at_sign_in() -> bool {
     true
@@ -496,6 +520,155 @@ pub fn finish_sign_in(ep: &Endpoints, ms: MsTokens) -> Result<(Account, Secrets)
     Ok((account, Secrets::new(ms.refresh, mc)))
 }
 
+pub const ELYBY_AUTH_URL: &str = "https://authserver.ely.by";
+pub const ELYBY_SKINS_URL: &str = "http://skinsystem.ely.by";
+
+pub fn elyby_authenticate(
+    login: &str,
+    password: &str,
+    two_factor: Option<&str>,
+) -> Result<(Account, Secrets), String> {
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).map_err(|e| e.to_string())?;
+    let client_token = format!("{:032x}", u128::from_be_bytes(random));
+    let pw = match two_factor.map(str::trim).filter(|c| !c.is_empty()) {
+        Some(code) => format!("{password}:{code}"),
+        None => password.to_string(),
+    };
+    let (status, v) = send(
+        request_to("POST", &format!("{ELYBY_AUTH_URL}/auth/authenticate")),
+        Some(Body::Json(json!({
+            "username": login.trim(),
+            "password": pw,
+            "clientToken": client_token,
+            "requestUser": false,
+        }))),
+        "Ely.by",
+    )?;
+    if status == 401
+        || v.get("error").and_then(Value::as_str) == Some("ForbiddenOperationException")
+    {
+        let message = v.get("errorMessage").and_then(Value::as_str).unwrap_or("");
+        if message.to_ascii_lowercase().contains("two factor") {
+            return Err("TWO_FACTOR_REQUIRED".into());
+        }
+        return Err("Wrong Ely.by login or password.".into());
+    }
+    if status != 200 {
+        let msg = v
+            .get("errorMessage")
+            .and_then(Value::as_str)
+            .unwrap_or("Ely.by refused the sign-in.");
+        return Err(msg.to_string());
+    }
+    let access_token = str_field(&v, "accessToken").ok_or("Ely.by sent an invalid response.")?;
+    let client_token = str_field(&v, "clientToken").unwrap_or(client_token);
+    let profile = v
+        .get("selectedProfile")
+        .ok_or("This Ely.by account has no profile yet.")?;
+    let name = str_field(profile, "name").ok_or("Ely.by profile has no name.")?;
+    let uuid = str_field(profile, "id")
+        .ok_or("Ely.by profile has no id.")?
+        .replace('-', "")
+        .to_lowercase();
+
+    let (skin, cape) = elyby_skin(&name);
+    let account = Account {
+        uuid,
+        name,
+        skin,
+        cape,
+        provider: AccountProvider::ElyBy,
+    };
+    let secrets = Secrets::elyby(client_token, access_token);
+    Ok((account, secrets))
+}
+
+pub fn elyby_skin(username: &str) -> (Option<(String, String)>, Option<String>) {
+    let resp = send(
+        request_to("GET", &format!("{ELYBY_SKINS_URL}/textures/{username}")),
+        None,
+        "Ely.by",
+    );
+    let Ok((200, v)) = resp else {
+        return (None, None);
+    };
+    let skin = v.get("SKIN").and_then(|s| {
+        let url = str_field(s, "url")?;
+        let model = s
+            .pointer("/metadata/model")
+            .and_then(Value::as_str)
+            .unwrap_or("classic")
+            .to_string();
+        Some((url, model))
+    });
+    let cape = v.get("CAPE").and_then(|c| str_field(c, "url"));
+    (skin, cape)
+}
+
+fn check_elyby(account: &Account, mut secrets: Secrets) -> Check {
+    let val_resp = send(
+        request_to("POST", &format!("{ELYBY_AUTH_URL}/auth/validate")),
+        Some(Body::Json(json!({ "accessToken": secrets.minecraft_token }))),
+        "Ely.by",
+    );
+    match val_resp {
+        Ok((status, _)) if status == 200 || status == 204 => {
+            let (skin, cape) = elyby_skin(&account.name);
+            let mut updated = account.clone();
+            if skin.is_some() {
+                updated.skin = skin;
+            }
+            if cape.is_some() {
+                updated.cape = cape;
+            }
+            Check::Owns(updated, secrets)
+        }
+        Ok((status, _)) if status < 500 => {
+            let ref_resp = send(
+                request_to("POST", &format!("{ELYBY_AUTH_URL}/auth/refresh")),
+                Some(Body::Json(json!({
+                    "accessToken": secrets.minecraft_token,
+                    "clientToken": secrets.refresh_token,
+                    "requestUser": false,
+                }))),
+                "Ely.by",
+            );
+            match ref_resp {
+                Ok((200, v)) => {
+                    let Some(new_token) = str_field(&v, "accessToken") else {
+                        return Check::DoesNot(Secrets {
+                            owns: false,
+                            ..secrets
+                        });
+                    };
+                    let new_client =
+                        str_field(&v, "clientToken").unwrap_or_else(|| secrets.refresh_token.clone());
+                    secrets.minecraft_token = new_token;
+                    secrets.refresh_token = new_client;
+                    secrets.minecraft_expires_at = now() + 86400 * 30;
+                    secrets.owns = true;
+                    let (skin, cape) = elyby_skin(&account.name);
+                    let mut updated = account.clone();
+                    if skin.is_some() {
+                        updated.skin = skin;
+                    }
+                    if cape.is_some() {
+                        updated.cape = cape;
+                    }
+                    Check::Owns(updated, secrets)
+                }
+                _ => Check::DoesNot(Secrets {
+                    owns: false,
+                    ..secrets
+                }),
+            }
+        }
+        Err(e) => Check::NoAnswer(e, secrets),
+        _ => Check::NoAnswer("Could not reach Ely.by.".into(), secrets),
+    }
+}
+
 impl Secrets {
     fn new(refresh_token: String, mc: Minecraft) -> Self {
         Self {
@@ -504,6 +677,17 @@ impl Secrets {
             minecraft_expires_at: mc.expires_at,
             xuid: mc.xuid,
             owns: true,
+            provider: AccountProvider::Microsoft,
+        }
+    }
+    pub fn elyby(client_token: String, access_token: String) -> Self {
+        Self {
+            refresh_token: client_token,
+            minecraft_token: access_token,
+            minecraft_expires_at: now() + 86400 * 30,
+            xuid: None,
+            owns: true,
+            provider: AccountProvider::ElyBy,
         }
     }
 }
@@ -521,6 +705,9 @@ enum Check {
 /// Asks whether `account` owns the game, with a Minecraft token renewed through the refresh token
 /// first when it has less than an hour left. The secrets come back renewed whatever the answer.
 fn check(ep: &Endpoints, client_id: Option<&str>, account: &Account, secrets: Secrets) -> Check {
+    if account.provider == AccountProvider::ElyBy || secrets.provider == AccountProvider::ElyBy {
+        return check_elyby(account, secrets);
+    }
     let mut secrets = secrets;
     if secrets.minecraft_expires_at <= now() + RENEW_BEFORE {
         let renewed = client_id
@@ -835,6 +1022,8 @@ pub struct Accounts {
 pub enum Player {
     /// A Microsoft account, by UUID.
     Microsoft(String),
+    /// An Ely.by account, by UUID.
+    ElyBy(String),
     /// An offline name.
     Offline(String),
     /// Offline as the name the game made up.
@@ -909,15 +1098,19 @@ impl Accounts {
     /// Whether an account here owned the game at its last check (the keychain's answer, no
     /// request): what Play and offline names need.
     pub fn has_owner(&self, store: &dyn SecretStore) -> bool {
-        self.accounts
-            .iter()
-            .any(|a| secrets_in(store, &a.uuid).is_some_and(|s| s.owns))
+        self.accounts.iter().any(|a| {
+            a.provider == AccountProvider::ElyBy
+                || secrets_in(store, &a.uuid).is_some_and(|s| s.owns)
+        })
     }
 
     /// Who plays now.
     pub fn player(&self) -> Player {
         match (self.selected(), &self.offline_selected) {
-            (Some(a), _) => Player::Microsoft(a.uuid.clone()),
+            (Some(a), _) => match a.provider {
+                AccountProvider::Microsoft => Player::Microsoft(a.uuid.clone()),
+                AccountProvider::ElyBy => Player::ElyBy(a.uuid.clone()),
+            },
             (None, Some(name)) => Player::Offline(name.clone()),
             (None, None) => Player::GameName,
         }
@@ -939,7 +1132,7 @@ impl Accounts {
         offline_without_owner: bool,
     ) -> Result<(), String> {
         match who {
-            Player::Microsoft(uuid) => {
+            Player::Microsoft(uuid) | Player::ElyBy(uuid) => {
                 if !self.accounts.iter().any(|a| a.uuid == uuid) {
                     return Err("That account isn't signed in.".into());
                 }
@@ -1196,7 +1389,7 @@ pub fn write_session_file(
         "name": account.name,
         "uuid": account.uuid,
         "access_token": secrets.minecraft_token,
-        "user_type": "msa",
+        "user_type": account.provider.user_type(),
         "xuid": secrets.xuid,
     });
     std::io::Write::write_all(&mut file, body.to_string().as_bytes()).map_err(|e| e.to_string())?;
@@ -1250,6 +1443,33 @@ impl SignIn {
     pub fn cancel(&self) {
         self.cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// An Ely.by sign-in on its own thread.
+pub struct ElyBySignIn {
+    state: std::sync::Arc<Mutex<Option<Result<Account, String>>>>,
+}
+
+impl ElyBySignIn {
+    pub fn start(login: String, password: String, code: Option<String>) -> Self {
+        let state = std::sync::Arc::new(Mutex::new(None));
+        let thread_state = state.clone();
+        std::thread::spawn(move || {
+            let result = (|| {
+                let (account, secrets) = elyby_authenticate(&login, &password, code.as_deref())?;
+                let mut accounts = Accounts::load();
+                accounts.add(store(), account.clone(), &secrets)?;
+                accounts.save()?;
+                Ok(account)
+            })();
+            *thread_state.lock().unwrap() = Some(result);
+        });
+        Self { state }
+    }
+
+    pub fn poll(&self) -> Option<Result<Account, String>> {
+        self.state.lock().unwrap().clone()
     }
 }
 
