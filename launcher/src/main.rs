@@ -62,7 +62,7 @@ use gpui::{
     KeyBinding, KeyDownEvent, Menu, MenuItem, MouseDownEvent, PathPromptOptions, Pixels, Point,
     SharedString, Stateful, Subscription, Window, WindowBounds, WindowOptions,
 };
-use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
+use horizon_launcher::account::{self, Accounts, ElyBySignIn, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
 use horizon_launcher::i18n::{self, tr, trf};
 use horizon_launcher::instances;
@@ -263,6 +263,10 @@ struct Launcher {
     auth_next: u64,
     sign_in: Option<SignIn>,
     sign_in_state: Option<SignInState>,
+    elyby_sign_in: Option<ElyBySignIn>,
+    elyby_dialog: bool,
+    elyby_2fa: bool,
+    elyby_error: Option<String>,
     /// What to say when the keychain doesn't keep sign-ins ([`account::no_keychain`]).
     keychain: Option<String>,
     /// Whether an account here owns the game, by the keychain's last answers (the owner gate);
@@ -520,6 +524,10 @@ impl Launcher {
             auth_next: 0,
             sign_in: None,
             sign_in_state: None,
+            elyby_sign_in: None,
+            elyby_dialog: false,
+            elyby_2fa: false,
+            elyby_error: None,
             keychain: None,
             owner: None,
             owner_screen_open: false,
@@ -1216,6 +1224,37 @@ impl Launcher {
                 changed = true;
             }
         }
+        if let Some(elyby) = &self.elyby_sign_in {
+            if let Some(result) = elyby.poll() {
+                self.elyby_sign_in = None;
+                match result {
+                    Ok(_) => {
+                        self.accounts = Accounts::load();
+                        self.owner = Some(true);
+                        self.owner_screen_open = false;
+                        self.client_error = None;
+                        self.elyby_dialog = false;
+                        self.elyby_2fa = false;
+                        self.elyby_error = None;
+                        self.servers.text(servers_page::Field::ElyByLogin).set(String::new());
+                        self.servers.text(servers_page::Field::ElyByPassword).set(String::new());
+                        self.servers.text(servers_page::Field::ElyByCode).set(String::new());
+                        if !self.settings.owner_notice_seen {
+                            self.settings.owner_notice_seen = true;
+                            self.settings.save();
+                        }
+                    }
+                    Err(e) if e == "TWO_FACTOR_REQUIRED" => {
+                        self.elyby_2fa = true;
+                        self.elyby_error = Some("Enter your 2FA authenticator code.".into());
+                    }
+                    Err(e) => {
+                        self.elyby_error = Some(e);
+                    }
+                }
+                changed = true;
+            }
+        }
         if self
             .checked
             .is_some_and(|at| at.elapsed() > backend::CHECK_EVERY)
@@ -1533,6 +1572,36 @@ impl Launcher {
     }
 
     /// Generic Add account and targeted re-sign-in share the launcher-owned device-code flow.
+
+    /// Starts the Microsoft sign-in; Settings and the owner gate's screen show its code.
+    fn submit_elyby(&mut self) {
+        if self.elyby_sign_in.is_some() {
+            return;
+        }
+        let login = self.servers.value(servers_page::Field::ElyByLogin).trim().to_string();
+        let password = self.servers.value(servers_page::Field::ElyByPassword).to_string();
+        let code = if self.elyby_2fa {
+            let c = self.servers.value(servers_page::Field::ElyByCode).trim().to_string();
+            if c.is_empty() {
+                self.elyby_error = Some("Enter your 2FA authenticator code.".into());
+                return;
+            }
+            Some(c)
+        } else {
+            None
+        };
+        if login.is_empty() {
+            self.elyby_error = Some("Enter your Ely.by username or email.".into());
+            return;
+        }
+        if password.is_empty() {
+            self.elyby_error = Some("Enter your password.".into());
+            return;
+        }
+        self.elyby_error = None;
+        self.elyby_sign_in = Some(ElyBySignIn::start(login, password, code));
+    }
+
     fn start_sign_in(&mut self) {
         self.begin_sign_in(None);
     }
@@ -3650,6 +3719,16 @@ impl Launcher {
             let plays = selected.as_ref() == Some(&a.uuid);
             let uuid = a.uuid.clone();
             let mut actions = div().flex().gap(px(4.));
+            let a_provider = a.provider;
+            let provider_name = match a_provider {
+                account::AccountProvider::Microsoft => "Microsoft account",
+                account::AccountProvider::ElyBy => "Ely.by account",
+            };
+            let status_tag = if plays {
+                format!("{provider_name} · plays")
+            } else {
+                format!("{provider_name} · signed in")
+            };
             if plays {
                 actions = actions.child(
                     button(format!("offline-{i}"), "Play offline", Kind::Ghost, &t).on_click(
@@ -3668,7 +3747,11 @@ impl Launcher {
                 actions = actions.child(
                     button(format!("select-{i}"), "Play as", Kind::Secondary, &t).on_click(
                         cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.play_as(account::Player::Microsoft(uuid.clone()));
+                            let player = match a_provider {
+                                account::AccountProvider::Microsoft => account::Player::Microsoft(uuid.clone()),
+                                account::AccountProvider::ElyBy => account::Player::ElyBy(uuid.clone()),
+                            };
+                            this.play_as(player);
                             cx.notify();
                         }),
                     ),
@@ -3746,10 +3829,17 @@ impl Launcher {
                 a.name.clone(),
                 Some(
                     div()
-                        .child(tr(if plays {
-                            "Microsoft account · plays"
-                        } else {
-                            "Microsoft account"
+                        .child(tr(match a.provider {
+                            account::AccountProvider::Microsoft => if plays {
+                                "Microsoft account · plays"
+                            } else {
+                                "Microsoft account"
+                            },
+                            account::AccountProvider::ElyBy => if plays {
+                                "Ely.by account · plays"
+                            } else {
+                                "Ely.by account"
+                            },
                         }))
                         .child(account_status_line(status, progress, &t))
                         .when(!busy, |row| {
@@ -3900,6 +3990,82 @@ impl Launcher {
             title,
             Some(detail.into_any_element()),
             action,
+            &t,
+        ));
+
+        // Ely.by account card
+        n += 1;
+        let elyby_busy = self.elyby_sign_in.is_some();
+        let (elyby_detail, elyby_action) = if !self.elyby_dialog {
+            let detail = div().child(tr("Sign in with your Ely.by account to use your Ely.by skin and name."));
+            let action = button("sign-in-elyby", "Sign in with Ely.by", Kind::Secondary, &t)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.elyby_dialog = true;
+                    this.elyby_error = None;
+                    this.focus_handle(servers_page::Field::ElyByLogin, cx);
+                    this.servers.focus_soon = Some(servers_page::Field::ElyByLogin);
+                    cx.notify();
+                }))
+                .into_any_element();
+            (detail, Some(action))
+        } else {
+            let mut form = div().flex().flex_col().gap(px(8.));
+            if let Some(err) = &self.elyby_error {
+                form = form.child(div().text_color(t.danger).text_size(px(theme::UI.px)).child(err.clone()));
+            }
+            form = form.child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(self.field(servers_page::Field::ElyByLogin, "Username or email", 200., cx))
+                    .child(self.field(servers_page::Field::ElyByPassword, "Password", 180., cx)),
+            );
+            if self.elyby_2fa {
+                form = form.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(self.field(servers_page::Field::ElyByCode, "2FA Authenticator code", 180., cx)),
+                );
+            }
+            let actions = div()
+                .flex()
+                .gap(px(4.))
+                .child(
+                    button(
+                        "elyby-submit",
+                        if elyby_busy { "Signing in…" } else { "Sign in" },
+                        Kind::Secondary,
+                        &t,
+                    )
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.submit_elyby();
+                        cx.notify();
+                    })),
+                )
+                .child(
+                    button("elyby-cancel", "Cancel", Kind::Ghost, &t).on_click(cx.listener(
+                        |this, _: &ClickEvent, _, cx| {
+                            this.elyby_dialog = false;
+                            this.elyby_2fa = false;
+                            this.elyby_error = None;
+                            this.servers.text(servers_page::Field::ElyByLogin).set(String::new());
+                            this.servers.text(servers_page::Field::ElyByPassword).set(String::new());
+                            this.servers.text(servers_page::Field::ElyByCode).set(String::new());
+                            cx.notify();
+                        },
+                    )),
+                );
+            (form, Some(actions.into_any_element()))
+        };
+        rows = rows.child(index_row(
+            n,
+            tr("Ely.by account"),
+            Some(elyby_detail.into_any_element()),
+            elyby_action,
             &t,
         ));
         (rows, n)

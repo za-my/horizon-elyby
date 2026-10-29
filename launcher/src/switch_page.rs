@@ -14,6 +14,12 @@ impl Launcher {
                     .map_or_else(String::new, |a| a.name.clone()),
                 tr("Microsoft account"),
             ),
+            Player::ElyBy(_) => (
+                self.accounts
+                    .selected()
+                    .map_or_else(String::new, |a| a.name.clone()),
+                tr("Ely.by account"),
+            ),
             Player::Offline(name) => (name, tr("Offline")),
             Player::GameName => (
                 self.offline_name.clone().unwrap_or_else(|| "Player".into()),
@@ -41,11 +47,17 @@ impl Launcher {
             .accounts
             .iter()
             .map(|a| {
-                (
-                    Player::Microsoft(a.uuid.clone()),
-                    a.name.clone(),
-                    tr("Microsoft"),
-                )
+                let (player, how) = match a.provider {
+                    account::AccountProvider::Microsoft => (
+                        Player::Microsoft(a.uuid.clone()),
+                        tr("Microsoft"),
+                    ),
+                    account::AccountProvider::ElyBy => (
+                        Player::ElyBy(a.uuid.clone()),
+                        tr("Ely.by"),
+                    ),
+                };
+                (player, a.name.clone(), how)
             })
             .collect();
         out.extend(

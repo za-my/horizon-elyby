@@ -3519,6 +3519,7 @@ mod tests {
             name: "Notch".into(),
             skin: None,
             cape: None,
+            provider: Default::default(),
         };
         let secrets = serde_json::from_str(
             r#"{"refresh_token":"r","minecraft_token":"t","minecraft_expires_at":1,"owns":true}"#,
