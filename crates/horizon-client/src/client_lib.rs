@@ -16,7 +16,7 @@ pub use horizon_client_render::{
     bluemap_detect, border_render, breaking, brewing, camera, chat, chunk, chunk_map, cit,
     cit_armor, cit_assets, cit_glint, client_resources, clouds, collisions, command_block,
     containers, controller_ui, crash, custom_sky, datapack, dynamic_light, dynamic_resolution,
-    effects, environment, extras, fast_hash, fluid_render, fog, font, gfx, graphics,
+    effects, elyby, environment, extras, fast_hash, fluid_render, fog, font, gfx, graphics,
     graphics_style, graphics_ui, hdr_calibration, hud, hud_kit, hud_layout, hud_overlays,
     inventory_effects, java_text, jigsaw_block, json_folder, level_loading, light, lod, logging,
     mark_sprite, menu_blur, menu_style, mesher, minimap, mipmap, mod_browser, mod_list,

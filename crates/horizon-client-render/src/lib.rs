@@ -45,6 +45,7 @@ pub mod datapack;
 pub mod dynamic_light;
 pub mod dynamic_resolution;
 pub mod effects;
+pub mod elyby;
 pub mod environment;
 pub mod extras;
 pub(crate) mod extras_ui;
