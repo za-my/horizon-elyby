@@ -3720,15 +3720,6 @@ impl Launcher {
             let uuid = a.uuid.clone();
             let mut actions = div().flex().gap(px(4.));
             let a_provider = a.provider;
-            let provider_name = match a_provider {
-                account::AccountProvider::Microsoft => "Microsoft account",
-                account::AccountProvider::ElyBy => "Ely.by account",
-            };
-            let status_tag = if plays {
-                format!("{provider_name} · plays")
-            } else {
-                format!("{provider_name} · signed in")
-            };
             if plays {
                 actions = actions.child(
                     button(format!("offline-{i}"), "Play offline", Kind::Ghost, &t).on_click(

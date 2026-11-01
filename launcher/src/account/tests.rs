@@ -888,6 +888,7 @@ fn has_owner_asks_the_selected_account_first() {
                 name: "Other".into(),
                 skin: None,
                 cape: None,
+                provider: AccountProvider::Microsoft,
             },
             &secrets("x-token", false),
         )
@@ -2065,6 +2066,7 @@ fn a_launch_as_another_account_leaves_the_selected_one() {
         name: "Alex".into(),
         skin: None,
         cape: None,
+        provider: AccountProvider::Microsoft,
     });
     // This launch plays as Alex: Notch's ownership opens the gate, and it is Alex who is told
     // to sign in again, so Alex played. Notch is still the one `account select` picked.
@@ -2092,6 +2094,7 @@ fn a_launch_as_another_account_leaves_the_selected_one() {
     );
     assert_eq!(gone.unwrap_err(), "That account isn't signed in.");
     assert_eq!(accounts.player(), Player::Microsoft(UUID.into()));
+}
 
 #[test]
 fn elyby_session_files_have_user_type_elyby() {
@@ -2105,6 +2108,7 @@ fn elyby_session_files_have_user_type_elyby() {
     };
     let secrets = Secrets {
         refresh_token: "client-token".into(),
+        sign_in_required: false,
         minecraft_token: "elyby-token".into(),
         minecraft_expires_at: now() + 3600,
         xuid: None,
@@ -2132,6 +2136,7 @@ fn elyby_account_satisfies_owner_gate_and_plays_as_elyby() {
     };
     let secrets = Secrets {
         refresh_token: "ct".into(),
+        sign_in_required: false,
         minecraft_token: "at".into(),
         minecraft_expires_at: now() + 3600,
         xuid: None,

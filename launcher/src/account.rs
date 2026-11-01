@@ -704,6 +704,7 @@ impl Secrets {
     pub fn elyby(client_token: String, access_token: String) -> Self {
         Self {
             refresh_token: client_token,
+            sign_in_required: false,
             minecraft_token: access_token,
             minecraft_expires_at: now() + 86400 * 30,
             xuid: None,
