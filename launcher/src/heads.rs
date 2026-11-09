@@ -183,15 +183,31 @@ fn profile_face_with(
         .skin
         .as_ref()
         .map(|(url, _)| url.clone())
-        .or_else(|| session_skin(&account.uuid, cache, fetch));
+        .or_else(|| match account.provider {
+            crate::account::AccountProvider::Microsoft => session_skin(&account.uuid, cache, fetch),
+            crate::account::AccountProvider::ElyBy => {
+                crate::account::elyby_skin(&account.name).0.map(|(url, _)| url)
+            }
+        });
     if let Some(url) = &url {
-        // Public Minecraft texture URLs only; never send credentials to a skin host.
-        let texture = url
+        // Public Minecraft texture URLs and Ely.by texture URLs; never send credentials to a skin host.
+        let is_valid_texture = if let Some(texture) = url
             .strip_prefix("https://textures.minecraft.net/texture/")
-            .or_else(|| url.strip_prefix("http://textures.minecraft.net/texture/"));
-        if texture
-            .is_some_and(|hash| !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+            .or_else(|| url.strip_prefix("http://textures.minecraft.net/texture/"))
         {
+            !texture.is_empty() && texture.bytes().all(|b| b.is_ascii_hexdigit())
+        } else if let Some(rest) = url
+            .strip_prefix("http://ely.by/storage/skins/")
+            .or_else(|| url.strip_prefix("https://ely.by/storage/skins/"))
+            .or_else(|| url.strip_prefix("http://skinsystem.ely.by/textures/"))
+            .or_else(|| url.strip_prefix("https://skinsystem.ely.by/textures/"))
+        {
+            let hash = rest.strip_suffix(".png").unwrap_or(rest);
+            !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_hexdigit())
+        } else {
+            false
+        };
+        if is_valid_texture {
             let file = cache.join(format!("{:x}.png", Sha1::digest(url.as_bytes())));
             if let Some(face) = std::fs::read(&file)
                 .ok()
@@ -385,5 +401,24 @@ mod tests {
             .is_some()
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn elyby_skin_is_cached_and_drawn() {
+        let dir = std::env::temp_dir().join(format!("hz-elyby-head-{}", std::process::id()));
+        let mut skin = image::RgbaImage::new(64, 64);
+        skin.put_pixel(8, 8, image::Rgba([77, 88, 99, 255]));
+        let mut png = Vec::new();
+        skin.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let account = crate::account::Account {
+            name: "zamy".into(),
+            uuid: "7f5647305a034ad8a675d4448385a413".into(),
+            skin: Some(("http://ely.by/storage/skins/7d3901089c7e0736c95f5034afea51ee.png".into(), "classic".into())),
+            cape: None,
+            provider: crate::account::AccountProvider::ElyBy,
+        };
+        let head = profile_face_with(&account, &dir.join("cache"), &dir, &|_| Some(png.clone())).unwrap();
+        assert_eq!(head[0], [77, 88, 99, 255]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

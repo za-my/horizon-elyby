@@ -26,9 +26,17 @@ pub struct Textures {
 
 /// The `getTexture` endpoint's valid URIs in production's services discovery
 /// document (`MinecraftServicesEnvironment.PROD`).
-pub const TEXTURE_URIS: [&str; 2] = [
+pub const TEXTURE_URIS: [&str; 10] = [
     "https://textures.minecraft.net/texture/{textureId}",
     "http://textures.minecraft.net/texture/{textureId}",
+    "http://ely.by/storage/skins/{textureId}",
+    "https://ely.by/storage/skins/{textureId}",
+    "http://ely.by/storage/cloaks/{textureId}",
+    "https://ely.by/storage/cloaks/{textureId}",
+    "http://skinsystem.ely.by/textures/{textureId}",
+    "https://skinsystem.ely.by/textures/{textureId}",
+    "http://skinsystem.ely.by/cloaks/{textureId}",
+    "https://skinsystem.ely.by/cloaks/{textureId}",
 ];
 
 /// `MinecraftServicesDiscoveryService`'s valid texture URIs: the discovery
@@ -784,11 +792,36 @@ fn read_offline_skin(path: &std::path::Path, model: &str) -> Result<(Vec<u8>, bo
 /// `fetchProfile(id, true)`, so its `textures` property is signed), or empty
 /// without an answer. Blocks on the network.
 pub fn fetch_own_properties(id: u128) -> Vec<(String, String, Option<String>)> {
-    crate::auth::discovery()
+    if let Some(props) = crate::auth::discovery()
         .ok()
         .and_then(|doc| resolve_profile(&NameOrId::Id(id), &doc))
         .map(|p| p.properties)
-        .unwrap_or_default()
+        .filter(|p| !p.is_empty())
+    {
+        return props;
+    }
+    // Fallback for Ely.by accounts: query Ely.by profile endpoint
+    let ely_url = format!("{}/session/profile/{id:032x}", crate::elyby::base_url());
+    if let Some(body) = http_get(&ely_url) {
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
+            if let Some(props) = v.get("properties").and_then(|p| p.as_array()) {
+                let list: Vec<(String, String, Option<String>)> = props
+                    .iter()
+                    .filter_map(|p| {
+                        Some((
+                            p.get("name")?.as_str()?.to_owned(),
+                            p.get("value")?.as_str()?.to_owned(),
+                            p.get("signature").and_then(|s| s.as_str()).map(str::to_owned),
+                        ))
+                    })
+                    .collect();
+                if !list.is_empty() {
+                    return list;
+                }
+            }
+        }
+    }
+    Vec::new()
 }
 
 /// Where a texture download stands.

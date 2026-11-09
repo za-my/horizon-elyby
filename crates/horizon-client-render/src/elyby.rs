@@ -12,12 +12,22 @@ use crate::auth::{AuthSession, Provider, parse_uuid};
 use std::{fmt, io::Write, path::Path, time::Duration};
 
 pub const DEFAULT_BASE: &str = "https://authserver.ely.by";
+pub const DEFAULT_SKINS_URL: &str = "http://skinsystem.ely.by";
 /// The kept account, in the folder `horizon-player.txt` lives in.
 pub const FILE: &str = "horizon-elyby.json";
 
 /// The authserver: `HORIZON_ELYBY_URL` overrides it (a mock in the harness).
 pub fn base_url() -> String {
     normalize_base(std::env::var("HORIZON_ELYBY_URL").ok().as_deref())
+}
+
+/// The skins server: `HORIZON_ELYBY_SKINS_URL` overrides it.
+pub fn skins_url() -> String {
+    std::env::var("HORIZON_ELYBY_SKINS_URL")
+        .ok()
+        .map(|t| t.trim().trim_end_matches('/').to_owned())
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| DEFAULT_SKINS_URL.to_owned())
 }
 
 fn normalize_base(text: Option<&str>) -> String {

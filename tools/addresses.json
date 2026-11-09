@@ -20,7 +20,10 @@
     "user.auth.xboxlive.com": "Xbox Live sign-in, as the vanilla launcher",
     "xsts.auth.xboxlive.com": "Xbox Live sign-in, as the vanilla launcher",
     "auth.xboxlive.com": "Xbox Live sign-in, as the vanilla launcher",
-    "www.microsoft.com": "Microsoft account links, as the vanilla launcher"
+    "www.microsoft.com": "Microsoft account links, as the vanilla launcher",
+    "ely.by": "Ely.by skins and textures",
+    "skinsystem.ely.by": "Ely.by skins and textures",
+    "authserver.ely.by": "Ely.by auth and profiles"
   },
   "not_addresses": {
     "aternos.me": "bluemap_detect.rs: a dynamic-DNS suffix, to guess a server's own map host",

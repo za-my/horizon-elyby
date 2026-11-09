@@ -65,7 +65,6 @@ Reference: https://docs.ely.by/en/minecraft-auth.html
 ## Not done
 
 - No title-screen UI: sign-in and the offline name are command-line only.
-- Ely.by skins: `skins.rs` fetches only from `textures.minecraft.net`, so Ely.by players show the
-  default skin.
+- Ely.by skins: fully supported in game and launcher (skinsystem.ely.by and ely.by storage).
 - The launcher doesn't know Ely.by (its owner gate is unchanged).
 - The "online mode" refusal text still names only the Microsoft account.

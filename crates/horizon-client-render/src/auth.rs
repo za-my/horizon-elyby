@@ -88,7 +88,6 @@ impl AuthSession {
         self.provider = provider;
         self
     }
-    }
     /// The session file's JSON: {"name", "uuid", "access_token", "user_type": "msa", "xuid"}.
     pub fn parse(text: &str) -> Result<Self, String> {
         let v: serde_json::Value =
@@ -577,6 +576,9 @@ const MINECRAFT_PROFILE: &str = "https://api.minecraftservices.com/minecraft/pro
 /// Single-player and integrated servers often send no `textures` property, or
 /// one without the equipped cape; the client asks the profile endpoint once.
 pub fn own_textures(session: &AuthSession) -> Option<crate::skins::Textures> {
+    if session.provider == Provider::ElyBy {
+        return own_textures_elyby(session);
+    }
     let response = agent()
         .get(MINECRAFT_PROFILE)
         .set("Authorization", &format!("Bearer {}", session.access_token))
@@ -588,6 +590,40 @@ pub fn own_textures(session: &AuthSession) -> Option<crate::skins::Textures> {
     let body = response.into_string().ok()?;
     let profile: serde_json::Value = serde_json::from_str(&body).ok()?;
     Some(crate::skins::services_profile_textures(&profile))
+}
+
+fn own_textures_elyby(session: &AuthSession) -> Option<crate::skins::Textures> {
+    let url = format!("{}/textures/{}", crate::elyby::skins_url(), session.name);
+    let response = agent().get(&url).call().ok()?;
+    if response.status() != 200 {
+        return None;
+    }
+    let body = response.into_string().ok()?;
+    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let skin_obj = v.get("SKIN");
+    let skin = skin_obj
+        .and_then(|s| s.get("url"))
+        .and_then(|u| u.as_str())
+        .map(str::to_owned);
+    let slim = skin_obj
+        .and_then(|s| s.pointer("/metadata/model"))
+        .and_then(|m| m.as_str())
+        == Some("slim");
+    let cape = v
+        .get("CAPE")
+        .and_then(|c| c.get("url"))
+        .and_then(|u| u.as_str())
+        .map(str::to_owned);
+    if skin.is_none() && cape.is_none() {
+        return None;
+    }
+    Some(crate::skins::Textures {
+        skin,
+        slim,
+        cape,
+        elytra: None,
+        signed: true,
+    })
 }
 
 /// What the session service says about a player joining this server
