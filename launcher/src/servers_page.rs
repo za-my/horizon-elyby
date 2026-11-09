@@ -1289,7 +1289,6 @@ impl Launcher {
             | Field::ConsoleSearch
             | Field::DeleteServer
             | Field::AccentHex
-            | Field::ShopGift
             | Field::ElyByLogin
             | Field::ElyByPassword
             | Field::ElyByCode => {}

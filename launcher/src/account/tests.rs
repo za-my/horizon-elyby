@@ -416,6 +416,7 @@ fn splitscreen_gets_the_other_accounts_that_still_hold() {
         name: name.into(),
         skin: None,
         cape: None,
+        provider: AccountProvider::Microsoft,
     };
     let expired = Secrets {
         minecraft_expires_at: 0,
@@ -496,6 +497,7 @@ fn splitscreen_never_hands_over_an_account_sent_back_to_sign_in() {
         name: "Eve".into(),
         skin: None,
         cape: None,
+        provider: AccountProvider::Microsoft,
     };
     accounts.add(&store, eve, &refused).unwrap();
     accounts.selected = Some(UUID.into());
@@ -1054,6 +1056,7 @@ fn has_owner_asks_the_selected_account_first() {
                 name: "Other".into(),
                 skin: None,
                 cape: None,
+                provider: AccountProvider::Microsoft,
             },
             &secrets("x-token", false),
         )
@@ -2445,6 +2448,7 @@ fn a_launch_as_another_account_leaves_the_selected_one() {
         name: "Alex".into(),
         skin: None,
         cape: None,
+        provider: AccountProvider::Microsoft,
     });
     // This launch plays as Alex: it is Alex who is told to sign in again (Notch owning the game
     // doesn't let Alex play), and Notch is still the one `account select` picked.
@@ -2480,6 +2484,7 @@ fn elyby_session_files_have_user_type_elyby() {
     };
     let secrets = Secrets {
         refresh_token: "client-token".into(),
+        sign_in_required: false,
         minecraft_token: "elyby-token".into(),
         minecraft_expires_at: now() + 3600,
         xuid: None,
@@ -2507,6 +2512,7 @@ fn elyby_account_satisfies_owner_gate_and_plays_as_elyby() {
     };
     let secrets = Secrets {
         refresh_token: "ct".into(),
+        sign_in_required: false,
         minecraft_token: "at".into(),
         minecraft_expires_at: now() + 3600,
         xuid: None,
@@ -2541,6 +2547,7 @@ fn splitscreen_stops_renewing_other_accounts_once_out_of_time() {
         name: "Cal".into(),
         skin: None,
         cape: None,
+        provider: AccountProvider::Microsoft,
     };
     accounts.add(&store, cal, &expired).unwrap();
     accounts.selected = Some(UUID.into());

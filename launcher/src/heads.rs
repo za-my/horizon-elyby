@@ -267,6 +267,7 @@ mod tests {
                 "classic".into(),
             )),
             cape: None,
+            provider: crate::account::AccountProvider::Microsoft,
         };
         let calls = std::cell::Cell::new(0);
         let fetch = |_: &str| {
@@ -335,6 +336,7 @@ mod tests {
             uuid: uuid.into(),
             skin: None,
             cape: None,
+            provider: crate::account::AccountProvider::Microsoft,
         };
         // No default skins in `resources`: the face can only be the session's skin.
         let none = dir.join("no-resources");
@@ -370,6 +372,7 @@ mod tests {
                 "classic".into(),
             )),
             cape: None,
+            provider: crate::account::AccountProvider::Microsoft,
         };
         let head = profile_face_with(&account, &dir.join("cache"), &dir, &|_| None).unwrap();
         assert_eq!(head[0], [3, 5, 7, 255]);

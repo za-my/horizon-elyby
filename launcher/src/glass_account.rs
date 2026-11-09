@@ -37,7 +37,14 @@ impl Launcher {
             Some(a) => (
                 Some(a.uuid.clone()),
                 a.name.clone(),
-                (Tone::Live, tr("Microsoft account · online servers too")),
+                match a.provider {
+                    account::AccountProvider::Microsoft => {
+                        (Tone::Live, tr("Microsoft account · online servers too"))
+                    }
+                    account::AccountProvider::ElyBy => {
+                        (Tone::Live, tr("Ely.by account · skin and auth"))
+                    }
+                },
             ),
             None => (
                 None,
