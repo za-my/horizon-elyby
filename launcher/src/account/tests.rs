@@ -715,6 +715,7 @@ fn the_game_plays_only_as_an_account_that_owns_it() {
         name: "Alex".into(),
         skin: None,
         cape: None,
+        provider: AccountProvider::Microsoft,
     });
     accounts.play_as("other").unwrap();
     let refused = launch_for_game(&ep, Some("test-client"), &store, &mut accounts).unwrap_err();
@@ -2556,9 +2557,9 @@ fn elyby_launch_env_supplies_name_skin_and_cape() {
         env,
         vec![
             ("HORIZON_PLAYER_NAME", "zamy".into()),
-            (crate::skins::SKIN_ENV, skin_path.to_string_lossy().into_owned()),
-            (crate::skins::MODEL_ENV, "slim".into()),
-            (crate::skins::CAPE_ENV, cape_path.to_string_lossy().into_owned()),
+            ("HORIZON_OFFLINE_SKIN", skin_path.to_string_lossy().into_owned()),
+            ("HORIZON_OFFLINE_SKIN_MODEL", "slim".into()),
+            ("HORIZON_OFFLINE_CAPE", cape_path.to_string_lossy().into_owned()),
         ]
     );
 }
@@ -2659,6 +2660,7 @@ fn a_launch_saving_late_keeps_sign_ins_and_outs_made_meanwhile() {
         name: name.into(),
         skin: None,
         cape: None,
+        provider: AccountProvider::Microsoft,
     };
     let mut before = signed_in(&store, &secrets("mc-token", true));
     before.accounts.push(other("gone", "Leaving"));

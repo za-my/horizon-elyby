@@ -1625,7 +1625,7 @@ impl Launcher {
                         self.servers.text(servers_page::Field::ElyByCode).set(String::new());
                         if !self.settings.owner_notice_seen {
                             self.settings.owner_notice_seen = true;
-                            self.settings.save();
+                            let _ = self.settings.save();
                         }
                     }
                     Err(e) if e == "TWO_FACTOR_REQUIRED" => {
@@ -4565,7 +4565,6 @@ impl Launcher {
             let plays = selected.as_ref() == Some(&a.uuid);
             let uuid = a.uuid.clone();
             let mut actions = div().flex().gap(px(4.));
-            let a_provider = a.provider;
             if plays {
                 actions = actions.child(
                     button(format!("offline-{i}"), "Play offline", Kind::Ghost, &t).on_click(
@@ -6091,6 +6090,7 @@ mod tests {
             name: "TestAccount".into(),
             skin: None,
             cape: None,
+            provider: horizon_launcher::account::AccountProvider::Microsoft,
         }));
         assert!(sign_in_change(&mut shown, SignInState::Starting).is_some());
         assert!(sign_in_change(&mut shown, SignInState::Starting).is_none());

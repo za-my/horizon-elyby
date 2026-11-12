@@ -2580,12 +2580,7 @@ pub fn session_for_game_as(game_home: &Path, who: &str) -> Result<GameSession, S
     if let Err(e) = accounts.save_renewed() {
         eprintln!("Horizon: the accounts are not saved: {e}");
     }
-    let fallback = match who {
-        Player::Microsoft(uuid) | Player::ElyBy(uuid) => {
-            accounts.accounts.iter().find(|a| &a.uuid == uuid).cloned()
-        }
-        _ => None,
-    };
+    let fallback = accounts.accounts.iter().find(|a| a.uuid == who).cloned();
     Ok(session_file(game_home, pass, env, fallback.as_ref()))
 }
 
@@ -2623,13 +2618,13 @@ fn elyby_launch_env(
     };
     if let Some((url, model)) = skin {
         if let Some(path) = cache_file(&url, cache, false) {
-            out.push((crate::skins::SKIN_ENV, path.to_string_lossy().into_owned()));
-            out.push((crate::skins::MODEL_ENV, model));
+            out.push(("HORIZON_OFFLINE_SKIN", path.to_string_lossy().into_owned()));
+            out.push(("HORIZON_OFFLINE_SKIN_MODEL", model));
         }
     }
     if let Some(url) = cape {
         if let Some(path) = cache_file(&url, cache, true) {
-            out.push((crate::skins::CAPE_ENV, path.to_string_lossy().into_owned()));
+            out.push(("HORIZON_OFFLINE_CAPE", path.to_string_lossy().into_owned()));
         }
     }
     out

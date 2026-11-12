@@ -376,7 +376,7 @@ mod tests {
     use super::*;
 
     const UUID: u128 = 0x069a79f444e94726a5befca90e38aaf5;
-    const GRANT: &str = r#"{"accessToken":"acc","clientToken":"cli","availableProfiles":[{"id":"069a79f444e94726a5befca90e38aaf5","name":"Notch"}],"selectedProfile":{"id":"069a79f444e94726a5befca90e38aaf5","name":"Notch"}}"#;
+    const GRANT: &str = r#"{"accessToken":"secret-acc-tok","clientToken":"secret-cli-tok","availableProfiles":[{"id":"069a79f444e94726a5befca90e38aaf5","name":"Notch"}],"selectedProfile":{"id":"069a79f444e94726a5befca90e38aaf5","name":"Notch"}}"#;
 
     fn dir(name: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("horizon-elyby-{name}-{}", std::process::id()));
@@ -445,10 +445,13 @@ mod tests {
         let a = Account::from_grant(GRANT).unwrap();
         let back = Account::from_json(&a.to_json()).unwrap();
         assert_eq!((back.name.as_str(), back.uuid), ("Notch", UUID));
-        assert_eq!(back.access_token, "acc");
-        assert_eq!(back.client_token, "cli");
+        assert_eq!(back.access_token, "secret-acc-tok");
+        assert_eq!(back.client_token, "secret-cli-tok");
         let shown = format!("{a:?} {:?}", a.session());
-        assert!(!shown.contains("acc") && !shown.contains("cli"), "{shown}");
+        assert!(
+            !shown.contains("secret-acc-tok") && !shown.contains("secret-cli-tok"),
+            "{shown}"
+        );
         assert!(Account::from_json("{}").is_err());
         assert!(Account::from_json("nope").is_err());
     }

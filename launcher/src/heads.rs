@@ -149,12 +149,11 @@ pub(crate) fn cache_skin_file_with(
     if !is_valid_texture_url(url) {
         return None;
     }
+    let _ = is_cape;
     let valid = |bytes: &[u8]| {
-        if is_cape {
-            crate::skins::read_cape(bytes).is_ok()
-        } else {
-            crate::skins::read_skin(bytes).is_ok()
-        }
+        image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
+            .ok()
+            .is_some_and(|img| img.width() >= 64 && img.height() >= 32)
     };
     let file = cached_skin_path(url, cache);
     if std::fs::read(&file).ok().is_some_and(|b| valid(&b)) {
