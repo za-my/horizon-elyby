@@ -2526,6 +2526,44 @@ fn elyby_account_satisfies_owner_gate_and_plays_as_elyby() {
 }
 
 #[test]
+fn elyby_launch_env_supplies_name_skin_and_cape() {
+    let dir = std::env::temp_dir().join(format!("horizon-launcher-elyby-env-{}", std::process::id()));
+    let skin_path = dir.join("skin.png");
+    let cape_path = dir.join("cape.png");
+    let account = Account {
+        uuid: UUID.into(),
+        name: "zamy".into(),
+        skin: Some((
+            "http://ely.by/storage/skins/7d3901089c7e0736c95f5034afea51ee.png".into(),
+            "slim".into(),
+        )),
+        cape: Some("http://ely.by/storage/cloaks/abc.png".into()),
+        provider: AccountProvider::ElyBy,
+    };
+    let env = elyby_launch_env(
+        &account,
+        &dir,
+        &|_| panic!("must not query textures when skin is already present"),
+        &|_url, _cache, is_cape| {
+            Some(if is_cape {
+                cape_path.clone()
+            } else {
+                skin_path.clone()
+            })
+        },
+    );
+    assert_eq!(
+        env,
+        vec![
+            ("HORIZON_PLAYER_NAME", "zamy".into()),
+            (crate::skins::SKIN_ENV, skin_path.to_string_lossy().into_owned()),
+            (crate::skins::MODEL_ENV, "slim".into()),
+            (crate::skins::CAPE_ENV, cape_path.to_string_lossy().into_owned()),
+        ]
+    );
+}
+
+#[test]
 fn splitscreen_stops_renewing_other_accounts_once_out_of_time() {
     // A sign-in service that never answers: any request would hang the test.
     let silent = TcpListener::bind("127.0.0.1:0").unwrap();

@@ -2551,7 +2551,8 @@ pub fn session_for_game(game_home: &Path) -> Result<GameSession, NoOwner> {
     if let Err(e) = accounts.save_renewed() {
         eprintln!("Horizon: the accounts are not saved: {e}");
     }
-    Ok(session_file(game_home, pass, env))
+    let fallback = accounts.selected().cloned();
+    Ok(session_file(game_home, pass, env, fallback.as_ref()))
 }
 
 /// [`session_for_game`] for one launch as `who` (`play --account`, a signed-in account): who
@@ -2579,7 +2580,13 @@ pub fn session_for_game_as(game_home: &Path, who: &str) -> Result<GameSession, S
     if let Err(e) = accounts.save_renewed() {
         eprintln!("Horizon: the accounts are not saved: {e}");
     }
-    Ok(session_file(game_home, pass, env))
+    let fallback = match who {
+        Player::Microsoft(uuid) | Player::ElyBy(uuid) => {
+            accounts.accounts.iter().find(|a| &a.uuid == uuid).cloned()
+        }
+        _ => None,
+    };
+    Ok(session_file(game_home, pass, env, fallback.as_ref()))
 }
 
 /// The owner gate as `who`, on `accounts`, which keeps its choice of player.
@@ -2598,18 +2605,70 @@ fn launch_as(
     pass
 }
 
+/// Name, skin and cape environment variables for an Ely.by account so both
+/// patched game builds and upstream builds (which reject `user_type: "elyby"`
+/// in session files) use the player's Ely.by username, skin and cape.
+fn elyby_launch_env(
+    account: &Account,
+    cache: &Path,
+    resolve_skin: &dyn Fn(&str) -> (Option<(String, String)>, Option<String>),
+    cache_file: &dyn Fn(&str, &Path, bool) -> Option<PathBuf>,
+) -> Vec<(&'static str, String)> {
+    let mut out = vec![("HORIZON_PLAYER_NAME", account.name.clone())];
+    let (skin, cape) = if account.skin.is_some() {
+        (account.skin.clone(), account.cape.clone())
+    } else {
+        let (fetched_skin, fetched_cape) = resolve_skin(&account.name);
+        (fetched_skin, account.cape.clone().or(fetched_cape))
+    };
+    if let Some((url, model)) = skin {
+        if let Some(path) = cache_file(&url, cache, false) {
+            out.push((crate::skins::SKIN_ENV, path.to_string_lossy().into_owned()));
+            out.push((crate::skins::MODEL_ENV, model));
+        }
+    }
+    if let Some(url) = cape {
+        if let Some(path) = cache_file(&url, cache, true) {
+            out.push((crate::skins::CAPE_ENV, path.to_string_lossy().into_owned()));
+        }
+    }
+    out
+}
+
 /// The game's session files for a launch that passed the gate.
-fn session_file(game_home: &Path, pass: Launch, env: Vec<(&'static str, String)>) -> GameSession {
+fn session_file(
+    game_home: &Path,
+    pass: Launch,
+    env: Vec<(&'static str, String)>,
+    fallback_account: Option<&Account>,
+) -> GameSession {
     let mut out = GameSession {
         env,
         offline: pass.offline,
         ..GameSession::default()
     };
+    let mut elyby = fallback_account
+        .filter(|a| a.provider == AccountProvider::ElyBy)
+        .cloned();
     if let Some((account, secrets)) = pass.session {
+        if account.provider == AccountProvider::ElyBy {
+            elyby = Some(account.clone());
+        } else {
+            elyby = None;
+        }
         match write_launch_session_file(&game_home.join("sessions"), &account, &secrets) {
             Ok(file) => out.file = Some(file),
             Err(e) => out.offline = Some(e),
         }
+    }
+    if let Some(account) = elyby {
+        let cache = crate::backend::data_dir().join("profile-heads");
+        out.env.extend(elyby_launch_env(
+            &account,
+            &cache,
+            &elyby_skin,
+            &crate::heads::cache_skin_file,
+        ));
     }
     out
 }

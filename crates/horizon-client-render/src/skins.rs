@@ -791,7 +791,41 @@ fn read_offline_skin(path: &std::path::Path, model: &str) -> Result<(Vec<u8>, bo
 /// The signed-in account's own profile properties (`Minecraft.profileFuture`:
 /// `fetchProfile(id, true)`, so its `textures` property is signed), or empty
 /// without an answer. Blocks on the network.
+fn fetch_elyby_properties(id: u128) -> Vec<(String, String, Option<String>)> {
+    let ely_url = format!(
+        "{}/session/profile/{id:032x}?unsigned=false",
+        crate::elyby::base_url()
+    );
+    let Some(body) = http_get(&ely_url) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return Vec::new();
+    };
+    let Some(props) = v.get("properties").and_then(|p| p.as_array()) else {
+        return Vec::new();
+    };
+    props
+        .iter()
+        .filter_map(|p| {
+            Some((
+                p.get("name")?.as_str()?.to_owned(),
+                p.get("value")?.as_str()?.to_owned(),
+                p.get("signature").and_then(|s| s.as_str()).map(str::to_owned),
+            ))
+        })
+        .collect()
+}
+
 pub fn fetch_own_properties(id: u128) -> Vec<(String, String, Option<String>)> {
+    let is_elyby = crate::auth::current()
+        .is_some_and(|s| s.provider == crate::auth::Provider::ElyBy && s.uuid == id);
+    if is_elyby {
+        let props = fetch_elyby_properties(id);
+        if !props.is_empty() {
+            return props;
+        }
+    }
     if let Some(props) = crate::auth::discovery()
         .ok()
         .and_then(|doc| resolve_profile(&NameOrId::Id(id), &doc))
@@ -800,25 +834,10 @@ pub fn fetch_own_properties(id: u128) -> Vec<(String, String, Option<String>)> {
     {
         return props;
     }
-    // Fallback for Ely.by accounts: query Ely.by profile endpoint
-    let ely_url = format!("{}/session/profile/{id:032x}", crate::elyby::base_url());
-    if let Some(body) = http_get(&ely_url) {
-        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
-            if let Some(props) = v.get("properties").and_then(|p| p.as_array()) {
-                let list: Vec<(String, String, Option<String>)> = props
-                    .iter()
-                    .filter_map(|p| {
-                        Some((
-                            p.get("name")?.as_str()?.to_owned(),
-                            p.get("value")?.as_str()?.to_owned(),
-                            p.get("signature").and_then(|s| s.as_str()).map(str::to_owned),
-                        ))
-                    })
-                    .collect();
-                if !list.is_empty() {
-                    return list;
-                }
-            }
+    if !is_elyby {
+        let props = fetch_elyby_properties(id);
+        if !props.is_empty() {
+            return props;
         }
     }
     Vec::new()

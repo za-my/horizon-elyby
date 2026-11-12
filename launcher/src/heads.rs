@@ -81,10 +81,92 @@ fn profile_pixels(png: &[u8]) -> Option<Vec<[u8; 4]>> {
         .flatten()
 }
 
+/// Path in `cache` where `profile_face` stores the texture PNG for `url`.
+pub fn cached_skin_path(url: &str, cache: &Path) -> std::path::PathBuf {
+    use sha1::{Digest, Sha1};
+    cache.join(format!("{:x}.png", Sha1::digest(url.as_bytes())))
+}
+
 /// The whole skin PNG `profile_face` kept for `url` in `cache`, if it fetched it.
 pub fn cached_skin(url: &str, cache: &Path) -> Option<Vec<u8>> {
-    use sha1::{Digest, Sha1};
-    std::fs::read(cache.join(format!("{:x}.png", Sha1::digest(url.as_bytes())))).ok()
+    std::fs::read(cached_skin_path(url, cache)).ok()
+}
+
+/// Public Minecraft and Ely.by texture URLs only; never send credentials to a skin host.
+pub(crate) fn is_valid_texture_url(url: &str) -> bool {
+    if let Some(texture) = url
+        .strip_prefix("https://textures.minecraft.net/texture/")
+        .or_else(|| url.strip_prefix("http://textures.minecraft.net/texture/"))
+    {
+        return !texture.is_empty() && texture.bytes().all(|b| b.is_ascii_hexdigit());
+    }
+    if let Some(rest) = url
+        .strip_prefix("http://ely.by/storage/skins/")
+        .or_else(|| url.strip_prefix("https://ely.by/storage/skins/"))
+        .or_else(|| url.strip_prefix("http://ely.by/storage/cloaks/"))
+        .or_else(|| url.strip_prefix("https://ely.by/storage/cloaks/"))
+        .or_else(|| url.strip_prefix("http://skinsystem.ely.by/textures/"))
+        .or_else(|| url.strip_prefix("https://skinsystem.ely.by/textures/"))
+        .or_else(|| url.strip_prefix("http://skinsystem.ely.by/cloaks/"))
+        .or_else(|| url.strip_prefix("https://skinsystem.ely.by/cloaks/"))
+    {
+        let hash = rest.strip_suffix(".png").unwrap_or(rest);
+        return !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_hexdigit());
+    }
+    false
+}
+
+fn fetch_texture_bytes(url: &str) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let response = crate::proxy::agent(
+        ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(10)),
+        url,
+    )
+    .build()
+    .get(url)
+    .call()
+    .ok()?;
+    let mut bytes = Vec::new();
+    response
+        .into_reader()
+        .take(1024 * 1024)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    Some(bytes)
+}
+
+/// Returns a local PNG path in `cache` for a valid skin or cape `url`, downloading it if missing.
+pub fn cache_skin_file(url: &str, cache: &Path, is_cape: bool) -> Option<std::path::PathBuf> {
+    cache_skin_file_with(url, cache, is_cape, &fetch_texture_bytes)
+}
+
+pub(crate) fn cache_skin_file_with(
+    url: &str,
+    cache: &Path,
+    is_cape: bool,
+    fetch: &dyn Fn(&str) -> Option<Vec<u8>>,
+) -> Option<std::path::PathBuf> {
+    if !is_valid_texture_url(url) {
+        return None;
+    }
+    let valid = |bytes: &[u8]| {
+        if is_cape {
+            crate::skins::read_cape(bytes).is_ok()
+        } else {
+            crate::skins::read_skin(bytes).is_ok()
+        }
+    };
+    let file = cached_skin_path(url, cache);
+    if std::fs::read(&file).ok().is_some_and(|b| valid(&b)) {
+        return Some(file);
+    }
+    let bytes = fetch(url)?;
+    if !valid(&bytes) {
+        return None;
+    }
+    std::fs::create_dir_all(cache).ok()?;
+    std::fs::write(&file, bytes).ok()?;
+    Some(file)
 }
 
 /// A signed-in profile's public skin, cached independently of its authentication tokens.
@@ -97,22 +179,8 @@ pub fn profile_face(
 ) -> (Option<Vec<[u8; 4]>>, bool) {
     let failed = std::cell::Cell::new(false);
     let face = profile_face_with(account, cache, resources, &|url| {
-        use std::io::Read;
         failed.set(true);
-        let response = crate::proxy::agent(
-            ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(10)),
-            url,
-        )
-        .build()
-        .get(url)
-        .call()
-        .ok()?;
-        let mut bytes = Vec::new();
-        response
-            .into_reader()
-            .take(1024 * 1024)
-            .read_to_end(&mut bytes)
-            .ok()?;
+        let bytes = fetch_texture_bytes(url)?;
         failed.set(false);
         Some(bytes)
     });
@@ -176,7 +244,6 @@ fn profile_face_with(
     resources: &Path,
     fetch: &dyn Fn(&str) -> Option<Vec<u8>>,
 ) -> Option<Vec<[u8; 4]>> {
-    use sha1::{Digest, Sha1};
     // An account saved without its skin (signed in before skins were kept, or its profile
     // answered without one) asks Mojang's session server, which needs no token.
     let url = account
@@ -190,25 +257,8 @@ fn profile_face_with(
             }
         });
     if let Some(url) = &url {
-        // Public Minecraft texture URLs and Ely.by texture URLs; never send credentials to a skin host.
-        let is_valid_texture = if let Some(texture) = url
-            .strip_prefix("https://textures.minecraft.net/texture/")
-            .or_else(|| url.strip_prefix("http://textures.minecraft.net/texture/"))
-        {
-            !texture.is_empty() && texture.bytes().all(|b| b.is_ascii_hexdigit())
-        } else if let Some(rest) = url
-            .strip_prefix("http://ely.by/storage/skins/")
-            .or_else(|| url.strip_prefix("https://ely.by/storage/skins/"))
-            .or_else(|| url.strip_prefix("http://skinsystem.ely.by/textures/"))
-            .or_else(|| url.strip_prefix("https://skinsystem.ely.by/textures/"))
-        {
-            let hash = rest.strip_suffix(".png").unwrap_or(rest);
-            !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_hexdigit())
-        } else {
-            false
-        };
-        if is_valid_texture {
-            let file = cache.join(format!("{:x}.png", Sha1::digest(url.as_bytes())));
+        if is_valid_texture_url(url) {
+            let file = cached_skin_path(url, cache);
             if let Some(face) = std::fs::read(&file)
                 .ok()
                 .and_then(|png| profile_pixels(&png))
@@ -419,6 +469,21 @@ mod tests {
         };
         let head = profile_face_with(&account, &dir.join("cache"), &dir, &|_| Some(png.clone())).unwrap();
         assert_eq!(head[0], [77, 88, 99, 255]);
+        let cached = cache_skin_file_with(
+            "http://ely.by/storage/skins/7d3901089c7e0736c95f5034afea51ee.png",
+            &dir.join("cache"),
+            false,
+            &|_| panic!("should reuse cached file"),
+        )
+        .unwrap();
+        assert!(cached.is_file());
+        assert!(cache_skin_file_with(
+            "https://example.com/evil.png",
+            &dir.join("cache"),
+            false,
+            &|_| panic!("must not fetch disallowed url"),
+        )
+        .is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

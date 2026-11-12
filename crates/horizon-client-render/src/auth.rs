@@ -520,6 +520,9 @@ pub fn prepare_chat_keys(now: bool) {
 
 /// Prepare keys for this player, independently of the other local accounts.
 pub fn prepare_chat_keys_for(session: Arc<AuthSession>, now: bool) {
+    if session.provider == Provider::ElyBy {
+        return;
+    }
     let uuid = session.uuid;
     let mut accounts = CHAT_KEYS.lock().unwrap();
     let keys = accounts.entry(uuid).or_default();
